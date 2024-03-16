@@ -1,0 +1,2 @@
+# eDiff
+Rolling Hash Algorithm
