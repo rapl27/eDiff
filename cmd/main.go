@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/rapl27/eDiff/delta"
+	hash "github.com/rapl27/eDiff/rollinghash"
 )
 
 const (
@@ -21,6 +24,7 @@ Options:
 	-chunkSize int
 	      The file chunk size (optional)
 */
+
 func main() {
 	// Parse command arguments
 	oldFilename := flag.String("oldFilename", "", "The original file")
@@ -42,46 +46,12 @@ func main() {
 
 	// Validate chunk size
 	if *chunkSize >= fileSize {
-		fmt.Println("Resizing chunk size to: %v", fileSize/2)
+		fmt.Printf("Resizing chunk size to: %v", fileSize/2)
 		*chunkSize = fileSize / 2
 	}
 
-	// Generate chunks signatures for the original file
-	rh, err := hash.NewRollingHashh(*chunkSize)
-	if err != nil {
-		fmt.Println("Error: Failed to create the rolling hash: %v", err)
-		return
-	}
-	oldFile, err := os.Open(*oldFilename)
-	if err != nil {
-		fmt.Println("Error: Failed to open file [%s]: %v", oldFilename, err)
-		return
-	}
-	defer oldFile.Close()
-
-	chunk := make([]byte, *chunkSize)
-	var oldSigs []uint32
-	for {
-		n, err := oldFile.Read(chunk)
-		if err != nil && err != io.EOF {
-			fmt.Println("Error: Failed to read chunk: %v", err)
-			return
-		}
-
-		if n == 0 {
-			break
-		}
-
-		oldSigs = append(oldSigs, rh.Sign(chunk))
-	}
-
 	// Compute delta
-	rd := delta.NewRollingDiffer(*chunkSize)
-	delta, err := rd.Delta(*oldFilename, *newFilename)
-	if err != nil {
-		fmt.Println("Error: Failed to compute file delta: %v", err)
-		return
-	}
+	delta := runDelta(*oldFilename, *newFilename, *chunkSize)
 
 	// Print delta and write to file
 	deltaFile, err := os.Create("output.diff")
@@ -90,8 +60,8 @@ func main() {
 		return
 	}
 	fmt.Println("Delta:")
-	for _, i := range delta {
-		txt := fmt.Sprintf("%v | % v | %v", i.index, i.op, i.content)
+	for _, d := range delta {
+		txt := fmt.Sprintf("%v | % v | %v", d.Offset, d.Operation, string(d.Data))
 		fmt.Println(txt)
 		_, err := fmt.Fprintln(deltaFile, txt)
 		if err != nil {
@@ -99,4 +69,48 @@ func main() {
 			return
 		}
 	}
+}
+
+func runDelta(oldFilename, newFilename string, chunkSize int64) []delta.Delta {
+	// Generate chunks signatures for the original file
+	rh := hash.NewRollingHash(chunkSize).(*hash.RollingHash)
+
+	oldFile, err := os.Open(oldFilename)
+	if err != nil {
+		fmt.Printf("Error: Failed to open file [%s]: %v", oldFilename, err)
+		return []delta.Delta{}
+	}
+	defer oldFile.Close()
+
+	chunk := make([]byte, chunkSize)
+	var oldSigs []uint32
+	for {
+		n, err := oldFile.Read(chunk)
+		if err != nil && err != io.EOF {
+			fmt.Printf("Error: Failed to read chunk: %v", err)
+			return []delta.Delta{}
+		}
+
+		if n == 0 {
+			break
+		}
+
+		rh.Reset()
+		rh.Write(chunk)
+		oldSigs = append(oldSigs, rh.Signature())
+	}
+
+	// Compute delta
+	rd, err := delta.NewRollingDiffer(chunkSize)
+	if err != nil {
+		fmt.Printf("Error: Failed to create differ instance: %v", err)
+		return []delta.Delta{}
+	}
+
+	delta, err := rd.Delta(oldSigs, newFilename)
+	if err != nil {
+		fmt.Printf("Error: Failed to compute file delta: %v", err)
+	}
+
+	return delta
 }

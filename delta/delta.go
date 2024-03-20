@@ -5,100 +5,115 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+
+	"github.com/iancoleman/orderedmap"
+	hash "github.com/rapl27/eDiff/rollinghash"
 )
 
-type rollingDiffer struct {
-	hash      RollingHash
+type RollingDiffer struct {
+	hash      hash.RollingHash
 	chunkSize int64
 }
 
-type Chunk struct {
-	Index     int64
-	Signature uint32
-
-	Operation string // todo: insert / modify / remove / unmodiffied
-	Buf       []byte
+type Delta struct {
+	Offset    int64
+	Operation string // I:inserted M:modified R:removed U:unmodiffied
+	Data      []byte
 }
 
-type Delta []Chunk
-
 func NewRollingDiffer(chunkSize int64) (Differ, error) {
-	rh, err := NewRollingHash(chunkSize)
-	if err != nil {
-		fmt.Println("Error: Failed to create the rolling hash: %v", err)
-		return nil, nil
-	}
+	rh := hash.NewRollingHash(chunkSize).(*hash.RollingHash)
 
-	return &rollingDiffer{
-		hash:      rh,
+	return &RollingDiffer{
+		hash:      *rh,
 		chunkSize: chunkSize,
 	}, nil
 }
 
-func (rd *rollingDiffer) Delta(oldSigs []uint32, newFilename string) (Delta, error) {
+func (rd *RollingDiffer) Delta(oldSigs []uint32, newFilename string) ([]Delta, error) {
+	var delta []Delta
+
 	// Open file
 	newFile, err := os.Open(newFilename)
 	if err != nil {
-		fmt.Println("Error: Failed to open file [%s]: %v", newFile, err)
+		fmt.Printf("Error: Failed to open file [%s]: %v", newFilename, err)
 		return nil, err
 	}
 	defer newFile.Close()
 
-	// initialize delta with chunk indexes and signatures
-	delta := initDelta(oldSigs)
+	// Initialize chunk index to signature map
+	chunksToSigMap := initSignaturesMap(oldSigs)
 
 	// Initialize rolling hash with the first chunck in input file
 	reader := bufio.NewReader(newFile)
 	buf := make([]byte, rd.chunkSize)
 	n, err := io.ReadAtLeast(reader, buf, int(rd.chunkSize))
-	if n < int(rd.chunkSize) {
-		//todo: do something
+	if err != nil || n < int(rd.chunkSize) {
+		fmt.Printf("Error: Failed to read from [%s]: %v", newFilename, err)
+		return nil, err
 	}
 	rd.hash.Write(buf)
 
-	// Search for a signature match function
-	sigMatch := func(sig uint32, delta Delta) int {
-		for i, d := range delta {
-			if d.Signature == sig {
-				return i
-			}
-		}
-
-		return -1
-	}
-
-	//Todo:  carefull when reaching the last byte not to roll the window outside
+	var unmatchedBytes []byte
 	for {
-		index := sigMatch(rd.rh.Signature(), delta)
-		if index != -1 {
-			// populate delta
-			/*
-					type Chunk struct {
-					Index     int64
-					Signature uint32
-
-					Operation string // todo: insert / modify / remove / unmodiffied
-					Buf       []byte
-				}
-			*/
-
-			// mark unchanged chunks
-			if delta[index].Operation == "" {
-				delta[index].Operation = "s"
+		// Search for signature match
+		matchIndex, unmatchIndexes := signatureMatch(rd.hash.Signature(), chunksToSigMap)
+		if matchIndex != -1 {
+			if len(unmatchedBytes) >= int(rd.chunkSize) {
+				unmatchedBytes = unmatchedBytes[rd.chunkSize:]
 			}
 
 			// mark removed chunks
-			// rd.rh.winStart
+			if len(unmatchedBytes) == 0 && len(unmatchIndexes) != 0 {
+				for _, i := range unmatchIndexes {
+					chunksToSigMap.Delete(strconv.Itoa(i))
+					delta = append(delta, Delta{
+						Offset:    int64(i),
+						Operation: "R",
+					})
+				}
+			}
 
-			// mark removed chunks
+			// mark modified and inserted chunks
+			for i := 0; i < len(unmatchedBytes); i += int(rd.chunkSize) {
+				end := i + int(rd.chunkSize)
+				if end > len(unmatchedBytes) {
+					end = len(unmatchedBytes)
+				}
+				newChunk := unmatchedBytes[i:end]
 
-			// mark inserted chunks
+				if len(unmatchIndexes) != 0 {
+					delta = append(delta, Delta{
+						Offset:    int64(unmatchIndexes[0]),
+						Operation: "M",
+						Data:      newChunk,
+					})
+					unmatchIndexes = unmatchIndexes[1:]
+				} else {
+					delta = append(delta, Delta{
+						Offset:    int64(rd.hash.Offset()) / rd.chunkSize,
+						Operation: "I",
+						Data:      newChunk,
+					})
+				}
+			}
 
+			// mark unmodified chunks
+			{
+				chunksToSigMap.Delete(strconv.Itoa(matchIndex))
+				delta = append(delta, Delta{
+					Offset:    int64(matchIndex),
+					Operation: "U",
+				})
+			}
+			unmatchedBytes = []byte{}
 		}
 
+		// Read next byte
 		b, err := reader.ReadByte()
 		if err != nil && err != io.EOF {
-			fmt.Println("Error: Failed to read byte: %v", err)
+			fmt.Printf("Error: Failed to read byte: %v", err)
 			return nil, err
 		}
 
@@ -107,17 +122,36 @@ func (rd *rollingDiffer) Delta(oldSigs []uint32, newFilename string) (Delta, err
 			break
 		}
 
-		rd.hash.RollHash(b)
+		// Roll the hash
+		byteOut := rd.hash.RollHash(b)
+		unmatchedBytes = append(unmatchedBytes, byteOut)
 	}
+
+	return delta, nil
 }
 
-func initDelta(signatures []uint32) Delta {
-	var delta Delta
+// Create map between chunck index and signature
+func initSignaturesMap(signatures []uint32) *orderedmap.OrderedMap {
+	m := orderedmap.New()
 	for i, sig := range signatures {
-		delta = append(delta, Chunk{
-			Index:     int64(i),
-			Signature: sig,
-		})
+		m.Set(strconv.Itoa(i+1), sig)
 	}
-	return delta
+	return m
+}
+
+// Search for signature match
+// Return chunk index that matched the signature, and an index slice for chuncks prior to the match
+func signatureMatch(newSig uint32, oldSigs *orderedmap.OrderedMap) (int, []int) {
+	var unmatchIndex []int
+	for _, key := range oldSigs.Keys() {
+		sig, _ := oldSigs.Get(key)
+		if newSig == sig {
+			index, _ := strconv.Atoi(key)
+			return index, unmatchIndex
+		} else {
+			index, _ := strconv.Atoi(key)
+			unmatchIndex = append(unmatchIndex, index)
+		}
+	}
+	return -1, unmatchIndex
 }
