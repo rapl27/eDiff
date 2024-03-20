@@ -1,18 +1,23 @@
-# eDiff
-Rolling Hash Algorithm
+```
+# Rolling Hash Algorithm
 
-Coomand line usage: ./main [OPTIONS]
+## Command Line Usage
 
-Options:
-	-oldFilename string
-	      The file for which delta will be computed
-	-newFilename string
-	      The file for which delta will be computed
-	-chunkSize int
-	      The file chunk size (optional)
+```bash
+./main [OPTIONS]
+```
 
-Delta output:
-Chunk index | Operation (I:inserted M:modified R:removed U:unmodiffied) | Data
-1 U
-2 M "text"
-3 R
+### Options
+
+- `-oldFilename string`: The original file
+- `-newFilename string`: The modified file
+- `-chunkSize int`: The file chunk size (optional)
+
+### Delta Output
+
+| Chunk Index | Operation (I:inserted M:modified R:removed U:unmodified) | Data   |
+|-------------|-----------------------------------------------------------|--------|
+| 1           | U                                                         |        |
+| 2           | M                                                         | "text" |
+| 3           | R                                                         |        |
+```
