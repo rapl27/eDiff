@@ -45,7 +45,7 @@ func (rd *RollingDiffer) Delta(oldSigs []uint32, newFilename string) ([]Delta, e
 	// Initialize chunk index to signature map
 	chunksToSigMap := initSignaturesMap(oldSigs)
 
-	// Initialize rolling hash with the first chunck in input file
+	// Initialize rolling hash with the first chunk in input file
 	reader := bufio.NewReader(newFile)
 	buf := make([]byte, rd.chunkSize)
 	n, err := io.ReadAtLeast(reader, buf, int(rd.chunkSize))
@@ -130,7 +130,7 @@ func (rd *RollingDiffer) Delta(oldSigs []uint32, newFilename string) ([]Delta, e
 	return delta, nil
 }
 
-// Create map between chunck index and signature
+// Create map between chunk index and signature
 func initSignaturesMap(signatures []uint32) *orderedmap.OrderedMap {
 	m := orderedmap.New()
 	for i, sig := range signatures {
@@ -140,7 +140,7 @@ func initSignaturesMap(signatures []uint32) *orderedmap.OrderedMap {
 }
 
 // Search for signature match
-// Return chunk index that matched the signature, and an index slice for chuncks prior to the match
+// Return chunk index that matched the signature, and an index slice for chunks prior to the match
 func signatureMatch(newSig uint32, oldSigs *orderedmap.OrderedMap) (int, []int) {
 	var unmatchIndex []int
 	for _, key := range oldSigs.Keys() {

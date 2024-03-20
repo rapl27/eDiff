@@ -14,17 +14,6 @@ const (
 	defaultChunkSize = 1024
 )
 
-/*
-Usage: ./main [OPTIONS]
-
-Options:
-
-	-filename string
-	      The file for which delta will be computed
-	-chunkSize int
-	      The file chunk size (optional)
-*/
-
 func main() {
 	// Parse command arguments
 	oldFilename := flag.String("oldFilename", "", "The original file")
